@@ -1,0 +1,14 @@
+{
+  "name": "com.arvore.uiexporter",
+  "version": "0.1.0",
+  "displayName": "Arvore UI Exporter",
+  "description": "Importa pacotes .uiexport gerados no Figma e monta interfaces UGUI, preservando o trabalho do dev entre re-exports.",
+  "unity": "6000.3",
+  "author": {
+    "name": "Arvore"
+  },
+  "dependencies": {
+    "com.unity.ugui": "2.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Arvore.UIExporter.Editor",
+  "rootNamespace": "Arvore.UIExporter.Editor",
+  "references": [
+    "Arvore.UIExporter",
+    "UnityEngine.UI",
+    "UnityEditor.UI",
+    "Unity.TextMeshPro"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

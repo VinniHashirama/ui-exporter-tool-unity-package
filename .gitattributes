@@ -1,0 +1,15 @@
+# Pacote .uiexport e um zip: tratar como binario evita que a normalizacao de fim de linha
+# corrompa o arquivo, e ele e golden file dos testes.
+*.uiexport binary
+
+# Script shell precisa de LF mesmo em checkout Windows, senao o shebang quebra com ^M em
+# Linux e macOS.
+*.sh text eol=lf
+
+# Arquivos da Unity: LF no repositorio, para o diff nao virar ruido entre maquinas.
+*.cs text eol=lf
+*.asmdef text eol=lf
+*.meta text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf

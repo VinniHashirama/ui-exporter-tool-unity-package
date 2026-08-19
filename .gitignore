@@ -1,0 +1,18 @@
+# ATENCAO: nunca ignorar *.meta. Os GUIDs dos .meta sao o que mantem as referencias
+# estaveis entre quem instala o pacote; sem eles cada clone gera GUIDs diferentes e as
+# referencias de asmdef e prefab quebram.
+#
+# Padroes aqui sao ANCORADOS na raiz (barra inicial) de proposito: um padrao solto como
+# "Build/" casaria com Editor/Build/, que e codigo-fonte do pacote.
+
+# Sujeira caso alguem abra este repo como projeto Unity por engano.
+/Library/
+/Temp/
+/Logs/
+/obj/
+/UserSettings/
+*.csproj
+*.sln
+
+.DS_Store
+Thumbs.db
