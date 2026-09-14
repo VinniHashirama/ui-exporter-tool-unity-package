@@ -21,25 +21,54 @@ namespace Arvore.UIExporter.Editor
     public sealed class ComponentResolver
     {
         private readonly Dictionary<string, GameObject> byCanonicalName;
+        private readonly List<string> ambiguousNames;
 
-        private ComponentResolver(Dictionary<string, GameObject> byCanonicalName)
+        private ComponentResolver(
+            Dictionary<string, GameObject> byCanonicalName,
+            List<string> ambiguousNames)
         {
             this.byCanonicalName = byCanonicalName;
+            this.ambiguousNames = ambiguousNames;
         }
 
         public IReadOnlyCollection<string> KnownNames => byCanonicalName.Keys;
 
         public int Count => byCanonicalName.Count;
 
+        /// <summary>
+        /// Nomes canônicos reivindicados por mais de um prefab e não desempatados pela
+        /// Mapping Table. Import com qualquer um destes precisa ser recusado.
+        /// </summary>
+        /// <remarks>
+        /// Não existe valor seguro a devolver para um nome ambíguo. Escolher o primeiro da
+        /// varredura faz o resultado depender da ordem do <c>AssetDatabase</c>; devolver
+        /// <c>null</c> é pior ainda, porque <see cref="PrefabBuilder"/> trata "sem prefab"
+        /// como mudança de espécie e <b>destrói</b> toda instância existente daquele
+        /// componente, junto com os overrides que o dev tinha nelas. A única ação segura é
+        /// não rodar o import.
+        /// </remarks>
+        public IReadOnlyList<string> AmbiguousNames => ambiguousNames;
+
         public static ComponentResolver Build(UIImportSettings settings, ImportReport report)
         {
             var map = new Dictionary<string, GameObject>(StringComparer.Ordinal);
+            var claimants = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
             string[] guids = AssetDatabase.FindAssets("t:Prefab", settings.KitSearchFolders);
 
+            // A ordem de FindAssets não é especificada, então sem ordenar aqui a resolução de
+            // um nome disputado mudaria entre máquinas — e, com ela, qual prefab as telas
+            // instanciam.
+            var paths = new List<string>(guids.Length);
             foreach (string guid in guids)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
+                paths.Add(AssetDatabase.GUIDToAssetPath(guid));
+            }
+
+            paths.Sort(StringComparer.Ordinal);
+
+            foreach (string path in paths)
+            {
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (prefab == null)
                 {
@@ -61,20 +90,21 @@ namespace Arvore.UIExporter.Editor
                     continue;
                 }
 
-                if (map.TryGetValue(canonical, out GameObject existing))
+                if (!claimants.TryGetValue(canonical, out List<string> claimed))
                 {
-                    // Ambíguo: escolher em silêncio significaria que o resultado do import
-                    // depende da ordem da varredura, o que é pior que reclamar.
-                    report.Warn(
-                        "kit/ambiguous",
-                        $"'{canonical}' é reivindicado por mais de um prefab " +
-                        $"('{AssetDatabase.GetAssetPath(existing)}' e '{path}'). " +
-                        "Resolva com um override na Mapping Table.");
-                    continue;
+                    claimed = new List<string>(1);
+                    claimants.Add(canonical, claimed);
                 }
 
-                map.Add(canonical, prefab);
+                claimed.Add(path);
+
+                if (!map.ContainsKey(canonical))
+                {
+                    map.Add(canonical, prefab);
+                }
             }
+
+            var overridden = new HashSet<string>(StringComparer.Ordinal);
 
             if (settings.MappingTable != null)
             {
@@ -86,7 +116,34 @@ namespace Arvore.UIExporter.Editor
                     }
 
                     map[entry.canonicalName] = entry.prefab;
+                    overridden.Add(entry.canonicalName);
                 }
+            }
+
+            // O override da Mapping Table existe justamente para desempatar, então só é
+            // ambíguo o que sobrou sem decisão explícita.
+            var ambiguous = new List<string>();
+
+            foreach (KeyValuePair<string, List<string>> entry in claimants)
+            {
+                if (entry.Value.Count > 1 && !overridden.Contains(entry.Key))
+                {
+                    ambiguous.Add(entry.Key);
+                }
+            }
+
+            ambiguous.Sort(StringComparer.Ordinal);
+
+            foreach (string canonical in ambiguous)
+            {
+                report.Error(
+                    "kit/ambiguous",
+                    $"'{canonical}' é reivindicado por mais de um prefab " +
+                    $"({string.Join(", ", claimants[canonical])}). " +
+                    "Aponte o certo com um override na Mapping Table, ou remova o UIKitComponent " +
+                    "do outro. O import não roda assim: qual prefab venceria dependeria da ordem " +
+                    "da varredura, e trocar de prefab recria as instâncias, perdendo os ajustes " +
+                    "do dev nelas.");
             }
 
             if (map.Count == 0)
@@ -98,7 +155,7 @@ namespace Arvore.UIExporter.Editor
                     "Window > Arvore > UI Exporter, ou ajuste as pastas de busca nas Import Settings.");
             }
 
-            return new ComponentResolver(map);
+            return new ComponentResolver(map, ambiguous);
         }
 
         public GameObject Resolve(string canonicalName)

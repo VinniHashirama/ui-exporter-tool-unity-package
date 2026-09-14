@@ -26,6 +26,9 @@ namespace Arvore.UIExporter.Editor
     {
         public const string JsonEntryName = "ui.json";
 
+        /// <summary>Entrada JSON do pacote de componente.</summary>
+        public const string KitEntryName = "kit.json";
+
         private const int MaxEntries = 2048;
         private const long MaxJsonBytes = 32L * 1024 * 1024;
         private const long MaxImageBytes = 32L * 1024 * 1024;
@@ -41,13 +44,23 @@ namespace Arvore.UIExporter.Editor
 
         private readonly Dictionary<string, byte[]> images;
 
-        private UIExportPackage(string json, Dictionary<string, byte[]> images)
+        private UIExportPackage(string json, Dictionary<string, byte[]> images, bool isKit)
         {
             Json = json;
+            IsKit = isKit;
             this.images = images;
         }
 
         public string Json { get; }
+
+        /// <summary>
+        /// true quando o pacote é de componente (<c>kit.json</c>), false quando é de tela.
+        /// </summary>
+        /// <remarks>
+        /// O discriminador é o nome da entrada, não o conteúdo. Assim um pacote nunca é
+        /// importado como a coisa errada por causa de um campo ausente ou inesperado.
+        /// </remarks>
+        public bool IsKit { get; }
 
         public IReadOnlyCollection<string> ImagePaths => images.Keys;
 
@@ -112,6 +125,7 @@ namespace Arvore.UIExporter.Editor
             }
 
             string json = null;
+            bool isKit = false;
             var images = new Dictionary<string, byte[]>(StringComparer.Ordinal);
             long budget = MaxTotalBytes;
 
@@ -126,15 +140,21 @@ namespace Arvore.UIExporter.Editor
                     continue;
                 }
 
-                if (name == JsonEntryName)
+                if (name == JsonEntryName || name == KitEntryName)
                 {
+                    // Um pacote é de tela OU de componente. Os dois juntos não é um pacote
+                    // ambíguo que dá para salvar escolhendo um: é um pacote de origem
+                    // desconhecida.
                     if (json != null)
                     {
-                        throw new UIExportException($"{packageName} tem mais de um ui.json.");
+                        throw new UIExportException(
+                            $"{packageName} tem mais de uma entrada JSON. Um pacote carrega " +
+                            $"{JsonEntryName} (tela) ou {KitEntryName} (componente), nunca ambos.");
                     }
 
                     byte[] jsonBytes = ReadEntry(entry, MaxJsonBytes, ref budget, packageName);
                     json = DecodeUtf8(jsonBytes);
+                    isKit = name == KitEntryName;
                     continue;
                 }
 
@@ -162,15 +182,17 @@ namespace Arvore.UIExporter.Editor
                 // bom, é um pacote que não sabemos de onde veio.
                 throw new UIExportException(
                     $"{packageName} tem a entrada inesperada '{Describe(name)}'. " +
-                    "Um pacote válido contém apenas ui.json e images/*.png.");
+                    $"Um pacote válido contém apenas {JsonEntryName} (ou {KitEntryName}) e " +
+                    "images/*.png.");
             }
 
             if (json == null)
             {
-                throw new UIExportException($"{packageName} não contém ui.json.");
+                throw new UIExportException(
+                    $"{packageName} não contém {JsonEntryName} nem {KitEntryName}.");
             }
 
-            return new UIExportPackage(json, images);
+            return new UIExportPackage(json, images, isKit);
         }
 
         /// <summary>

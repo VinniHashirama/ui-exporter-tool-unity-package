@@ -154,6 +154,11 @@ namespace Arvore.UIExporter.Editor
 
         public IRCanvas Canvas { get; set; }
 
+        /// <summary>
+        /// Presente apenas no pacote de componente. Ausente = pacote de tela.
+        /// </summary>
+        public IRKit Kit { get; set; }
+
         public IRTokens Tokens { get; set; }
 
         public List<IRAsset> Assets { get; set; } = new List<IRAsset>();
@@ -161,6 +166,47 @@ namespace Arvore.UIExporter.Editor
         public List<IRDiagnostic> Lint { get; set; } = new List<IRDiagnostic>();
 
         public IRNode Root { get; set; }
+    }
+
+    /// <summary>Papel do componente: qual esqueleto de comportamento montar na Unity.</summary>
+    public enum KitRole
+    {
+        Button,
+        Toggle,
+        Container,
+        Display,
+        Icon,
+        Image,
+    }
+
+    /// <summary>Cabeçalho do pacote de componente.</summary>
+    public sealed class IRKit
+    {
+        public string CanonicalName { get; set; }
+
+        public KitRole Role { get; set; }
+
+        /// <summary>
+        /// Variante do Figma de onde o pacote saiu.
+        /// </summary>
+        /// <remarks>
+        /// Cada variante tem ids de node próprios. Exportar de uma variante diferente depois
+        /// trocaria todos os ids de uma vez, e a reconciliação recriaria o prefab inteiro —
+        /// levando junto tudo que o dev tivesse pendurado nele. Por isso o importador guarda
+        /// este valor e recusa quando ele muda.
+        /// </remarks>
+        public string SourceVariantId { get; set; }
+
+        public List<string> IgnoredVariants { get; set; } = new List<string>();
+
+        public List<IRKitSlot> Slots { get; set; } = new List<IRKitSlot>();
+    }
+
+    public sealed class IRKitSlot
+    {
+        public string Name { get; set; }
+
+        public string NodeId { get; set; }
     }
 
     public sealed class IRSource

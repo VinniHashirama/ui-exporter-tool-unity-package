@@ -4,6 +4,28 @@ using UnityEngine;
 namespace Arvore.UIExporter.Editor
 {
     /// <summary>
+    /// Condição de dimensão que o importador exige de cada sprite.
+    /// </summary>
+    /// <remarks>
+    /// A distinção importa e costuma ser confundida: o que a <b>compressão em blocos</b>
+    /// (ASTC, DXT, ETC) exige é dimensão múltipla de 4 — sem isso a textura fica em RGBA32 e
+    /// ocupa várias vezes mais memória. Potência de 2 é requisito de formatos e plataformas
+    /// antigos, e para UI em UGUI quase nunca faz diferença. Por isso o padrão é o múltiplo
+    /// de 4, e POT existe como opção para quem tem uma exigência concreta.
+    /// </remarks>
+    public enum SpriteSizePolicy
+    {
+        /// <summary>Aceita qualquer dimensão; nem relata.</summary>
+        None,
+
+        /// <summary>Exige múltiplo de 4, para a compressão em blocos funcionar.</summary>
+        MultipleOfFour,
+
+        /// <summary>Exige potência de 2. Só para quem tem um formato que pede isso.</summary>
+        PowerOfTwo,
+    }
+
+    /// <summary>
     /// Configuração do importador, uma por projeto.
     /// </summary>
     /// <remarks>
@@ -45,6 +67,13 @@ namespace Arvore.UIExporter.Editor
         [Range(256, 8192)]
         private int maxTextureSize = 2048;
 
+        [SerializeField]
+        [Tooltip(
+            "Dimensão mínima exigida do sprite. Múltiplo de 4 é o que a compressão em blocos " +
+            "(ASTC/DXT/ETC) precisa; sem isso a textura fica em RGBA32 e ocupa várias vezes " +
+            "mais memória. Potência de 2 quase nunca é necessária para UI em UGUI.")]
+        private SpriteSizePolicy spriteSizePolicy = SpriteSizePolicy.MultipleOfFour;
+
         public string GeneratedRoot => Normalize(generatedRoot, "Assets/UI/Generated");
 
         public string ScreensRoot => Normalize(screensRoot, "Assets/UI/Screens");
@@ -56,6 +85,8 @@ namespace Arvore.UIExporter.Editor
         public Sprite RoundedSprite => roundedSprite;
 
         public int MaxTextureSize => maxTextureSize;
+
+        public SpriteSizePolicy SpriteSizePolicy => spriteSizePolicy;
 
         public string[] KitSearchFolders =>
             kitSearchFolders is { Length: > 0 } ? kitSearchFolders : new[] { "Assets" };

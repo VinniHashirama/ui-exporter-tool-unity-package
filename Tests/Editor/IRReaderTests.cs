@@ -22,6 +22,19 @@ namespace Arvore.UIExporter.Tests
                 SchemaGate.Check("1.0.7", out _));
         }
 
+        /// <summary>
+        /// A minor que o plugin emite hoje. Se este teste falhar, todo import passa a avisar
+        /// "pacote mais novo" — ruído constante que ensina o dev a ignorar o report.
+        /// </summary>
+        [Test]
+        public void CurrentSchemaVersion_IsCompatible()
+        {
+            SchemaCompatibility result = SchemaGate.Check("1.1.0", out string message);
+
+            Assert.AreEqual(SchemaCompatibility.Compatible, result);
+            Assert.IsNull(message);
+        }
+
         [Test]
         public void NewerMinor_ImportsWithWarning()
         {
