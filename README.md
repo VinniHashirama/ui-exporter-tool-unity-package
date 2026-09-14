@@ -17,7 +17,7 @@ Requer **Unity 6000.3+**. Dependências: `com.unity.ugui` (que já traz o TextMe
 **Window → Package Manager → `+` → Add package from git URL**, e cole:
 
 ```
-https://github.com/VinniHashirama/ui-exporter-tool-unity-package.git#v0.1.0
+https://github.com/VinniHashirama/ui-exporter-tool-unity-package.git#v0.2.0
 ```
 
 Ou, direto no `Packages/manifest.json` do jogo:
@@ -25,12 +25,12 @@ Ou, direto no `Packages/manifest.json` do jogo:
 ```jsonc
 {
   "dependencies": {
-    "com.arvore.uiexporter": "https://github.com/VinniHashirama/ui-exporter-tool-unity-package.git#v0.1.0"
+    "com.arvore.uiexporter": "https://github.com/VinniHashirama/ui-exporter-tool-unity-package.git#v0.2.0"
   }
 }
 ```
 
-**Sempre instale com a tag** (`#v0.1.0`). Sem ela o Package Manager fixa o commit que estava no
+**Sempre instale com a tag** (`#v0.2.0`). Sem ela o Package Manager fixa o commit que estava no
 `main` no momento da instalação, e a partir daí atualizar dá trabalho — veja a seção seguinte.
 
 Se o projeto for novo, importe também **Window → TextMeshPro → Import TMP Essential Resources**.

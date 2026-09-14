@@ -2,17 +2,23 @@
 
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/). Versionamento semântico.
 
-Instale sempre com tag (`#v0.1.0`) e atualize trocando a tag no `Packages/manifest.json` — o
+Instale sempre com tag (`#v0.2.0`) e atualize trocando a tag no `Packages/manifest.json` — o
 Package Manager não mostra botão de update para pacotes vindos de Git.
 
 A compatibilidade com o plugin é dada pelo **major do `schemaVersion`** do contrato, não por
 esta versão. Este pacote suporta `schemaVersion` **1.1.x** e recusa major diferente com
 mensagem clara, em vez de gerar um prefab silenciosamente errado.
 
-## [Não publicado]
+## [0.2.0] — 2026-09-14
 
 Import de componente do kit autorado no Figma, e a correção de quatro caminhos que destruíam
 trabalho do dev sem aviso. 72 testes EditMode.
+
+**Para atualizar:** troque `#v0.1.0` por `#v0.2.0` no `Packages/manifest.json`. Nenhum passo de
+migração é necessário — telas já importadas continuam funcionando, e o pacote passa a aceitar
+também `schemaVersion` 1.1.x. Se o seu projeto tinha dois prefabs reivindicando o mesmo nome
+canônico, o import agora **bloqueia** em vez de escolher um: resolva com um override na
+`UIMappingTable` antes de subir de versão.
 
 ### Adicionado
 
