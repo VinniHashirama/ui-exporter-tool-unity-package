@@ -29,7 +29,12 @@ namespace Arvore.UIExporter.Editor
     public static class SchemaGate
     {
         public const int SupportedMajor = 1;
-        public const int SupportedMinor = 0;
+
+        /// <summary>
+        /// 1.1 acrescentou o bloco <c>kit</c>, do pacote de componente. Campo novo e opcional,
+        /// então um pacote de tela 1.0 continua importando sem nenhuma diferença.
+        /// </summary>
+        public const int SupportedMinor = 1;
 
         public static string SupportedVersion =>
             $"{SupportedMajor}.{SupportedMinor}.x";

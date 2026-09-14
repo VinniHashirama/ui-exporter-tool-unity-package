@@ -32,6 +32,13 @@ namespace Arvore.UIExporter.Editor
 
             public ImportDiff Diff { get; internal set; }
 
+            /// <summary>
+            /// Montado em <see cref="Prepare"/> e reusado em <see cref="Execute"/>: o diff
+            /// depende dele, e reconstruí-lo poderia dar um resultado diferente do que foi
+            /// mostrado ao dev.
+            /// </summary>
+            public ComponentResolver Resolver { get; internal set; }
+
             public ImportReport Report { get; internal set; }
 
             public UIImportSettings Settings { get; internal set; }
@@ -108,7 +115,19 @@ namespace Arvore.UIExporter.Editor
             plan.BasePrefabPath = $"{generatedFolder}/{screenName}_Base.prefab";
             plan.SpritesFolder = $"{generatedFolder}/Sprites";
             plan.VariantPath = $"{plan.Settings.ScreensRoot}/{screenName}.prefab";
-            plan.Diff = ImportDiff.Compute(document, plan.BasePrefabPath);
+
+            // O resolver roda aqui, e não no Execute, porque de qual prefab cada nome canônico
+            // resolve depende se instâncias existentes serão reusadas ou destruídas. Calcular o
+            // diff antes de saber disso deixaria a única confirmação do sistema cega justamente
+            // para a mudança mais cara.
+            plan.Resolver = ComponentResolver.Build(plan.Settings, report);
+            plan.Diff = ImportDiff.Compute(document, plan.BasePrefabPath, plan.Resolver);
+
+            if (plan.Resolver.AmbiguousNames.Count > 0)
+            {
+                return plan;
+            }
+
             plan.CanImport = true;
 
             return plan;
@@ -137,7 +156,7 @@ namespace Arvore.UIExporter.Editor
                     plan.Settings,
                     report);
 
-                ComponentResolver resolver = ComponentResolver.Build(plan.Settings, report);
+                ComponentResolver resolver = plan.Resolver;
 
                 var builder = new PrefabBuilder(plan.Settings, resolver, spriteResult, report);
                 builder.BuildOrUpdate(plan.Document, plan.BasePrefabPath);

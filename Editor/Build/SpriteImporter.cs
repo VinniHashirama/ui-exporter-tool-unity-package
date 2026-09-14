@@ -87,6 +87,8 @@ namespace Arvore.UIExporter.Editor
 
                     string path = $"{spritesFolder}/{asset.Id}.png";
 
+                    ReportSizePolicy(asset, settings, report);
+
                     if (WriteIfChanged(path, bytes))
                     {
                         result.Written++;
@@ -126,6 +128,63 @@ namespace Arvore.UIExporter.Editor
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Relata sprites cuja dimensão custa memória na Unity. Nunca altera o pixel.
+        /// </summary>
+        /// <remarks>
+        /// O que importa aqui é ser <b>múltiplo de 4</b>: a compressão em blocos (ASTC, DXT,
+        /// ETC) só se aplica nessa condição, e sem ela a textura fica em RGBA32, várias vezes
+        /// maior na memória. Potência de 2 quase nunca faz diferença para UI em UGUI.
+        /// <para>
+        /// O importador <b>não</b> corrige sozinho, e isso é deliberado. Corrigir exigiria
+        /// preencher a textura e recortar o sprite de volta ao desenho; o recorte depende de
+        /// <c>ISpriteEditorDataProvider</c>, que vive num pacote que este aqui não quer impor a
+        /// todo jogo, e preencher sem recortar espremeria o desenho — imperceptível num fundo
+        /// de 200px, 11% num ícone de 18px. Entre uma correção que às vezes deforma e um aviso
+        /// preciso, o aviso é a escolha honesta. A correção de verdade é o <c>SpriteAtlas</c>,
+        /// que resolve compressão e batching de uma vez.
+        /// </para>
+        /// </remarks>
+        private static void ReportSizePolicy(
+            IRAsset asset,
+            UIImportSettings settings,
+            ImportReport report)
+        {
+            if (settings.SpriteSizePolicy == SpriteSizePolicy.None) return;
+            if (asset.Width <= 0 || asset.Height <= 0) return;
+
+            int width = NextAllowed(asset.Width, settings.SpriteSizePolicy);
+            int height = NextAllowed(asset.Height, settings.SpriteSizePolicy);
+
+            if (width == asset.Width && height == asset.Height) return;
+
+            report.Warn(
+                "sprite/size-policy",
+                $"'{asset.Id}' é {asset.Width}x{asset.Height}; {width}x{height} atenderia " +
+                $"{settings.SpriteSizePolicy}. Como está, a compressão em blocos não se aplica " +
+                "e a textura ocupa mais memória do que precisaria. Ajuste o tamanho da layer " +
+                "no Figma, ou aceite o custo.");
+        }
+
+        private static int NextAllowed(int value, SpriteSizePolicy policy)
+        {
+            if (value <= 0) return value;
+
+            switch (policy)
+            {
+                case SpriteSizePolicy.MultipleOfFour:
+                    return (value + 3) / 4 * 4;
+
+                case SpriteSizePolicy.PowerOfTwo:
+                    int size = 1;
+                    while (size < value) size <<= 1;
+                    return size;
+
+                default:
+                    return value;
+            }
         }
 
         /// <summary>
@@ -177,7 +236,6 @@ namespace Arvore.UIExporter.Editor
             }
 
             importer.textureType = TextureImporterType.Sprite;
-            importer.spriteImportMode = SpriteImportMode.Single;
             importer.mipmapEnabled = false;
             importer.wrapMode = TextureWrapMode.Clamp;
             importer.filterMode = FilterMode.Bilinear;
@@ -188,6 +246,7 @@ namespace Arvore.UIExporter.Editor
             // tamanho de design ao ser desenhado.
             importer.spritePixelsPerUnit = Mathf.Max(1, asset.Scale) * 100f;
 
+            importer.spriteImportMode = SpriteImportMode.Single;
             importer.spriteBorder = ResolveBorder(asset);
 
             importer.SaveAndReimport();

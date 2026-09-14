@@ -45,6 +45,21 @@ namespace Arvore.UIExporter.Editor
         private readonly List<UIViewRef> binds = new List<UIViewRef>();
         private readonly HashSet<string> bindKeys = new HashSet<string>(StringComparer.Ordinal);
 
+        /// <summary>Objetos deste build, por nodeId. É por onde os slots do kit se ligam.</summary>
+        private readonly Dictionary<string, GameObject> builtByNodeId =
+            new Dictionary<string, GameObject>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Modo de kit: a raiz é um componente, não uma tela.
+        /// </summary>
+        /// <remarks>
+        /// Uma bandeira em vez de um segundo builder porque a reconciliação — reencontrar cada
+        /// node pelo <see cref="FigmaNodeRef"/> e reusar o GameObject — é o que preserva o
+        /// trabalho do dev, e é delicada demais para existir em duas cópias que possam
+        /// divergir. O que muda entre os dois modos é pequeno e está marcado ponto a ponto.
+        /// </remarks>
+        private bool kitMode;
+
         public PrefabBuilder(
             UIImportSettings settings,
             ComponentResolver resolver,
@@ -100,6 +115,114 @@ namespace Arvore.UIExporter.Editor
                 {
                     UnityEngine.Object.DestroyImmediate(root);
                 }
+            }
+        }
+
+        /// <summary>Cria ou atualiza o prefab de um componente do kit.</summary>
+        /// <remarks>
+        /// Um prefab só, no caminho onde as telas já apontam — sem par base/variante. Em tela
+        /// isso funciona porque a ferramenta escreve layout e o dev escreve scripts, conjuntos
+        /// disjuntos. Numa skin os dois escreveriam <i>as mesmas</i> propriedades (sprite, cor,
+        /// tamanho), e o override do artista mascararia todo re-export seguinte, em silêncio.
+        /// Quem quiser um prefab próprio aponta por <see cref="UIMappingTable"/>: ou a
+        /// aparência vem do Figma, ou o prefab é do jogo — nunca os dois na mesma propriedade.
+        /// <para>
+        /// Um prefab por nome canônico também elimina a ambiguidade de resolução por
+        /// construção, e ambiguidade é o que dispara o caminho destrutivo do
+        /// <see cref="Acquire"/>.
+        /// </para>
+        /// </remarks>
+        public string BuildKitOrUpdate(IRDocument document, string prefabPath)
+        {
+            kitMode = true;
+
+            bool exists = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) != null;
+            GameObject root = exists
+                ? PrefabUtility.LoadPrefabContents(prefabPath)
+                : new GameObject(document.Root.Name, typeof(RectTransform));
+
+            try
+            {
+                if (exists)
+                {
+                    IndexExisting(root);
+                }
+
+                var designSize = new Vector2(document.Canvas.Width, document.Canvas.Height);
+
+                Reconcile(
+                    document.Root,
+                    parent: null,
+                    existingRoot: root,
+                    parentSize: designSize,
+                    parentHasLayout: false,
+                    siblingIndex: 0);
+
+                RemoveOrphans();
+
+                // O esqueleto de comportamento entra DEPOIS da skin: ele precisa apontar para
+                // o Graphic que a reconciliação acabou de produzir.
+                KitSkeleton.Apply(root, document.Kit.Role, report);
+                ApplyKitIdentity(root, document.Kit);
+
+                PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+                return prefabPath;
+            }
+            finally
+            {
+                if (exists)
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+                else
+                {
+                    UnityEngine.Object.DestroyImmediate(root);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Escreve <see cref="UIKitComponent"/> com o nome canônico e os slots do pacote.
+        /// </summary>
+        /// <remarks>
+        /// Os slots vêm por nodeId, nunca por nome: o designer renomeia layer o tempo todo, e
+        /// o id sobrevive a isso. Slot que aponta para um node que sumiu é reportado em vez de
+        /// gravado vazio, senão o prefab passaria a mentir sobre o que expõe.
+        /// </remarks>
+        private void ApplyKitIdentity(GameObject root, IRKit kit)
+        {
+            var slots = new List<UIKitSlot>();
+
+            foreach (IRKitSlot slot in kit.Slots)
+            {
+                if (string.IsNullOrEmpty(slot?.Name) || string.IsNullOrEmpty(slot.NodeId))
+                {
+                    continue;
+                }
+
+                if (!builtByNodeId.TryGetValue(slot.NodeId, out GameObject target) || target == null)
+                {
+                    report.Warn(
+                        "kit/slot-missing",
+                        $"O slot '{slot.Name}' aponta para uma layer que não veio no pacote. " +
+                        "Ele ficou de fora do prefab.",
+                        kit.CanonicalName);
+                    continue;
+                }
+
+                slots.Add(new UIKitSlot { name = slot.Name, target = target.transform });
+            }
+
+            ComponentUtil.Ensure<UIKitComponent>(root).Configure(kit.CanonicalName, slots);
+
+            if (kit.IgnoredVariants != null && kit.IgnoredVariants.Count > 0)
+            {
+                report.Info(
+                    "kit/variants-ignored",
+                    $"{kit.IgnoredVariants.Count} variante(s) do Figma não vieram no pacote " +
+                    $"({string.Join(", ", kit.IgnoredVariants)}). Os estados vêm do prefab, por " +
+                    "tint de cor.",
+                    kit.CanonicalName);
             }
         }
 
@@ -182,6 +305,7 @@ namespace Arvore.UIExporter.Editor
                 : Acquire(node, parent, kitPrefab);
 
             visitedNodeIds.Add(node.Id);
+            builtByNodeId[node.Id] = target;
 
             target.name = SafeName(node.Name);
 
@@ -204,7 +328,13 @@ namespace Arvore.UIExporter.Editor
 
             ApplyKind(target, node, kitPrefab);
 
-            CollectBind(target, node);
+            // `@bind` é conceito de tela: quem resolve é o UIViewRefs da raiz da tela, que um
+            // prefab de componente não tem. Coletar aqui só produziria avisos de bind duplicado
+            // entre componentes que por acaso usam o mesmo nome.
+            if (!kitMode)
+            {
+                CollectBind(target, node);
+            }
 
             bool hasLayout = node.Layout != null;
             var selfSize = new Vector2(node.Rect.Width, node.Rect.Height);
@@ -271,7 +401,13 @@ namespace Arvore.UIExporter.Editor
         /// Um objeto só pode ser reusado se continuar sendo a mesma <i>espécie</i> de coisa:
         /// instância do mesmo prefab do kit, ou objeto comum como antes.
         /// </summary>
-        private static bool IsShapeCompatible(GameObject candidate, GameObject kitPrefab)
+        /// <remarks>
+        /// <c>internal</c> porque <see cref="ImportDiff"/> precisa prever exatamente esta
+        /// decisão para avisar o dev antes de gravar. Duplicar a regra lá abriria espaço para
+        /// as duas divergirem, e a divergência apareceria como "o diff disse que nada seria
+        /// perdido" depois da perda.
+        /// </remarks>
+        internal static bool IsShapeCompatible(GameObject candidate, GameObject kitPrefab)
         {
             bool isInstanceRoot = PrefabUtility.IsAnyPrefabInstanceRoot(candidate);
 
@@ -341,6 +477,19 @@ namespace Arvore.UIExporter.Editor
 
             if (isRoot)
             {
+                if (kitMode)
+                {
+                    // Raiz de componente é de tamanho fixo, não esticada: quem a posiciona é o
+                    // RectSolver da tela onde ela for instanciada, ou o LayoutGroup do pai.
+                    // Esticá-la aqui faria o componente ignorar o próprio tamanho de design.
+                    rect.anchorMin = new Vector2(0.5f, 0.5f);
+                    rect.anchorMax = new Vector2(0.5f, 0.5f);
+                    rect.pivot = new Vector2(0.5f, 0.5f);
+                    rect.anchoredPosition = Vector2.zero;
+                    rect.sizeDelta = new Vector2(node.Rect.Width, node.Rect.Height);
+                    return;
+                }
+
                 // A raiz preenche o pai onde for instanciada: é o CanvasScaler que resolve
                 // a escala, e a resolução de design fica registrada no UIViewRefs.
                 RectSolution.FullStretch.ApplyTo(rect);
@@ -435,7 +584,7 @@ namespace Arvore.UIExporter.Editor
 
             if (fill == null)
             {
-                ComponentUtil.Remove<Image>(target);
+                RemoveImageUnlessSelectableNeedsIt(target, node);
                 return;
             }
 
@@ -447,7 +596,7 @@ namespace Arvore.UIExporter.Editor
 
             Image image = ComponentUtil.Ensure<Image>(target);
             image.color = ComponentUtil.ParseColor(fill.Color, Color.white);
-            image.raycastTarget = false;
+            ApplyRaycastTarget(image);
 
             bool rounded = HasCornerRadius(node);
 
@@ -473,11 +622,65 @@ namespace Arvore.UIExporter.Editor
             }
         }
 
+        /// <summary>
+        /// Fundo decorativo não intercepta clique — mas o fundo de um <see cref="Selectable"/>
+        /// <b>é</b> a área clicável dele.
+        /// </summary>
+        /// <remarks>
+        /// O default de <c>raycastTarget = false</c> existe para não empilhar alvos de raycast
+        /// em frames puramente visuais, que é desperdício em tela cheia. Só que aplicar isso
+        /// ao <c>targetGraphic</c> de um Selectable deixa o botão sem área clicável, e nada
+        /// no editor denuncia: o prefab parece certo, o clique simplesmente não acontece.
+        /// </remarks>
+        private static void ApplyRaycastTarget(Image image)
+        {
+            var selectable = image.GetComponent<Selectable>();
+            bool isHitArea = selectable != null && selectable.targetGraphic == image;
+
+            image.raycastTarget = isHitArea;
+        }
+
+        /// <summary>
+        /// Remove o <see cref="Image"/> de um node sem fill, a menos que ele seja o
+        /// <c>targetGraphic</c> de um <see cref="Selectable"/>.
+        /// </summary>
+        /// <remarks>
+        /// Sem esta guarda, mover o fundo de um botão para uma layer filha no Figma — uma
+        /// mudança de design banal — apagaria o Graphic que o Button usa, deixando-o sem
+        /// transição de estado e sem raycast. O componente continuaria existindo e não
+        /// funcionaria, sem erro no console.
+        /// </remarks>
+        private void RemoveImageUnlessSelectableNeedsIt(GameObject target, IRNode node)
+        {
+            if (!target.TryGetComponent(out Image image))
+            {
+                return;
+            }
+
+            var selectable = target.GetComponent<Selectable>();
+
+            if (selectable != null && selectable.targetGraphic == image)
+            {
+                image.color = Color.clear;
+
+                report.Info(
+                    "fill/kept-for-selectable",
+                    $"'{node.Name}' ficou sem fundo no design, mas o Image é a área clicável " +
+                    "do componente. Mantive o Image transparente: removê-lo desativaria o " +
+                    "clique e a transição de estado.",
+                    node.Name);
+
+                return;
+            }
+
+            ComponentUtil.Remove<Image>(target);
+        }
+
         private void ApplyImageFill(GameObject target, IRNode node)
         {
             Image image = ComponentUtil.Ensure<Image>(target);
             image.color = Color.white;
-            image.raycastTarget = false;
+            ApplyRaycastTarget(image);
 
             Sprite sprite = sprites.Resolve(node.Fill?.AssetId);
 
@@ -521,6 +724,17 @@ namespace Arvore.UIExporter.Editor
                     image.type = Image.Type.Simple;
                     image.preserveAspect = false;
                     break;
+            }
+
+            // Um sprite com borda de 9-slice só respeita a borda em modo Sliced: em Simple a
+            // borda é ignorada e o fundo estica inteiro, distorcendo os cantos — exatamente o
+            // que o 9-slice existe para evitar. `Fit` fica de fora porque Sliced não combina
+            // com preserveAspect.
+            if (sprite.border != Vector4.zero
+                && image.type == Image.Type.Simple
+                && !image.preserveAspect)
+            {
+                image.type = Image.Type.Sliced;
             }
         }
 

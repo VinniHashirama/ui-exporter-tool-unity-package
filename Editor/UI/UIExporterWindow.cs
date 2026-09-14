@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -16,10 +17,12 @@ namespace Arvore.UIExporter.Editor
     public sealed class UIExporterWindow : EditorWindow
     {
         private const string PackageExtension = "uiexport";
+        private const string KitExtension = "uikit";
         private const string LastFolderKey = "Arvore.UIExporter.LastFolder";
 
         private string packagePath;
         private ScreenImporter.Plan plan;
+        private KitImporter.Plan kitPlan;
         private ImportReport lastReport;
         private Vector2 scroll;
         private bool showDiffDetails;
@@ -43,6 +46,12 @@ namespace Arvore.UIExporter.Editor
             if (plan != null)
             {
                 DrawPlan();
+                EditorGUILayout.Space(8f);
+            }
+
+            if (kitPlan != null)
+            {
+                DrawKitPlan();
                 EditorGUILayout.Space(8f);
             }
 
@@ -75,7 +84,7 @@ namespace Arvore.UIExporter.Editor
             }
 
             EditorGUILayout.HelpBox(
-                $"Selecione o arquivo .{PackageExtension} que o designer exportou do Figma. " +
+                $".{PackageExtension} é uma tela; .{KitExtension} é um componente do kit. " +
                 "Nada é escrito no projeto até você confirmar.",
                 MessageType.None);
         }
@@ -84,10 +93,15 @@ namespace Arvore.UIExporter.Editor
         {
             string startFolder = EditorPrefs.GetString(LastFolderKey, Application.dataPath);
 
-            string chosen = EditorUtility.OpenFilePanel(
-                "Escolher pacote .uiexport",
+            string chosen = EditorUtility.OpenFilePanelWithFilters(
+                "Escolher pacote do Figma",
                 Directory.Exists(startFolder) ? startFolder : Application.dataPath,
-                PackageExtension);
+                new[]
+                {
+                    "Pacotes do UI Exporter", $"{PackageExtension},{KitExtension}",
+                    "Tela", PackageExtension,
+                    "Componente do kit", KitExtension,
+                });
 
             if (string.IsNullOrEmpty(chosen))
             {
@@ -99,13 +113,130 @@ namespace Arvore.UIExporter.Editor
             packagePath = chosen;
             lastReport = null;
             showDiffDetails = false;
+            plan = null;
+            kitPlan = null;
+
+            // A extensão roteia, não o conteúdo: um pacote nunca deve ser importado como a
+            // coisa errada por causa de um campo ausente ou inesperado.
+            bool isKit = Path.GetExtension(chosen)
+                .TrimStart('.')
+                .Equals(KitExtension, System.StringComparison.OrdinalIgnoreCase);
+
+            if (isKit)
+            {
+                kitPlan = KitImporter.Prepare(packagePath);
+                if (!kitPlan.CanImport) lastReport = kitPlan.Report;
+                return;
+            }
 
             plan = ScreenImporter.Prepare(packagePath);
+            if (!plan.CanImport) lastReport = plan.Report;
+        }
 
-            if (!plan.CanImport)
+        private void DrawKitPlan()
+        {
+            EditorGUILayout.LabelField("O que vai acontecer", EditorStyles.boldLabel);
+
+            if (!kitPlan.CanImport)
             {
-                lastReport = plan.Report;
+                EditorGUILayout.HelpBox(
+                    "O pacote não passou na validação. Veja os erros abaixo.",
+                    MessageType.Error);
+                return;
             }
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Componente", kitPlan.CanonicalName);
+                EditorGUILayout.LabelField("Papel", kitPlan.Document.Kit.Role.ToString());
+                EditorGUILayout.LabelField(
+                    "Tamanho de design",
+                    $"{kitPlan.Document.Canvas.Width} x {kitPlan.Document.Canvas.Height}");
+                EditorGUILayout.LabelField("Prefab", kitPlan.PrefabPath);
+                EditorGUILayout.LabelField("Slots", string.Join(", ", SlotNames(kitPlan)));
+                EditorGUILayout.LabelField("Mudanças", kitPlan.Diff.Summary());
+            }
+
+            if (kitPlan.DependentScreens.Length > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{kitPlan.DependentScreens.Length} tela(s) instanciam este componente e " +
+                    "vão refletir a mudança. Elas não estão sendo importadas agora, então " +
+                    "confira o resultado nelas depois.",
+                    MessageType.Info);
+            }
+
+            if (kitPlan.NeedsAdoption)
+            {
+                EditorGUILayout.HelpBox(
+                    "Já existe um prefab neste nome que não foi gerado a partir do Figma — " +
+                    "provavelmente o kit placeholder. Adotar reconstrói o corpo dele a partir " +
+                    "do componente do Figma; ajustes internos que você tenha feito ali se " +
+                    "perdem. A referência do prefab sobrevive, então as telas continuam " +
+                    "apontando para ele.",
+                    MessageType.Warning);
+
+                kitPlan.AdoptExisting = EditorGUILayout.ToggleLeft(
+                    "Entendi, adotar o prefab existente",
+                    kitPlan.AdoptExisting);
+            }
+
+            EditorGUILayout.Space(4f);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Reanalisar", GUILayout.Width(100f)))
+                {
+                    bool adopt = kitPlan.AdoptExisting;
+                    kitPlan = KitImporter.Prepare(packagePath);
+                    kitPlan.AdoptExisting = adopt;
+                    lastReport = kitPlan.CanImport ? null : kitPlan.Report;
+                }
+
+                EditorGUI.BeginDisabledGroup(kitPlan.NeedsAdoption && !kitPlan.AdoptExisting);
+
+                if (GUILayout.Button("Importar componente"))
+                {
+                    RunKitImport();
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+        }
+
+        private static string[] SlotNames(KitImporter.Plan source)
+        {
+            var names = new List<string>();
+            foreach (IRKitSlot slot in source.Document.Kit.Slots)
+            {
+                if (!string.IsNullOrEmpty(slot?.Name)) names.Add(slot.Name);
+            }
+
+            return names.Count > 0 ? names.ToArray() : new[] { "nenhum" };
+        }
+
+        private void RunKitImport()
+        {
+            try
+            {
+                EditorUtility.DisplayProgressBar(
+                    "UI Exporter",
+                    $"Importando {kitPlan.CanonicalName}...",
+                    0.5f);
+
+                lastReport = KitImporter.Execute(kitPlan);
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+
+            AssetDatabase.Refresh();
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(kitPlan.PrefabPath);
+            if (prefab != null) EditorGUIUtility.PingObject(prefab);
+
+            kitPlan = KitImporter.Prepare(packagePath);
         }
 
         private void DrawPlan()
@@ -133,20 +264,39 @@ namespace Arvore.UIExporter.Editor
 
             if (plan.Diff.IsDestructive)
             {
-                EditorGUILayout.HelpBox(
-                    $"{plan.Diff.Removed.Count} objeto(s) serão REMOVIDOS do prefab base. " +
-                    "Se o dev tinha scripts ou referências pendurados nesses objetos, vão " +
-                    "embora com eles.",
-                    MessageType.Warning);
+                var warning = new StringBuilder();
 
-                showDiffDetails = EditorGUILayout.Foldout(showDiffDetails, "Ver o que será removido");
+                if (plan.Diff.Removed.Count > 0)
+                {
+                    warning.Append($"{plan.Diff.Removed.Count} objeto(s) serão REMOVIDOS do ");
+                    warning.Append("prefab base. ");
+                }
+
+                if (plan.Diff.Recreated.Count > 0)
+                {
+                    warning.Append($"{plan.Diff.Recreated.Count} objeto(s) trocaram de prefab do ");
+                    warning.Append("kit e serão RECRIADOS. ");
+                }
+
+                warning.Append("Se o dev tinha scripts ou referências pendurados nesses objetos, ");
+                warning.Append("vão embora com eles.");
+
+                EditorGUILayout.HelpBox(warning.ToString(), MessageType.Warning);
+
+                showDiffDetails = EditorGUILayout.Foldout(showDiffDetails, "Ver o que será afetado");
 
                 if (showDiffDetails)
                 {
                     EditorGUI.indentLevel++;
+
                     foreach (string name in plan.Diff.Removed)
                     {
-                        EditorGUILayout.LabelField("• " + name);
+                        EditorGUILayout.LabelField("• " + name + "  (removido)");
+                    }
+
+                    foreach (string name in plan.Diff.Recreated)
+                    {
+                        EditorGUILayout.LabelField("• " + name + "  (recriado)");
                     }
 
                     EditorGUI.indentLevel--;
@@ -165,7 +315,7 @@ namespace Arvore.UIExporter.Editor
 
                 GUI.backgroundColor = plan.Diff.IsDestructive ? new Color(1f, 0.85f, 0.6f) : Color.white;
 
-                if (GUILayout.Button(plan.Diff.IsDestructive ? "Importar (com remoções)" : "Importar"))
+                if (GUILayout.Button(plan.Diff.IsDestructive ? "Importar (com perdas)" : "Importar"))
                 {
                     RunImport();
                 }
@@ -178,11 +328,26 @@ namespace Arvore.UIExporter.Editor
         {
             if (plan.Diff.IsDestructive)
             {
+                var detail = new StringBuilder();
+
+                if (plan.Diff.Removed.Count > 0)
+                {
+                    detail.AppendLine(
+                        $"{plan.Diff.Removed.Count} objeto(s) serão removidos do prefab base de " +
+                        $"'{plan.ScreenName}'.");
+                }
+
+                if (plan.Diff.Recreated.Count > 0)
+                {
+                    detail.AppendLine(
+                        $"{plan.Diff.Recreated.Count} objeto(s) trocaram de prefab do kit e serão " +
+                        "destruídos e refeitos.");
+                }
+
                 bool confirmed = EditorUtility.DisplayDialog(
                     "Confirmar import",
-                    $"{plan.Diff.Removed.Count} objeto(s) serão removidos do prefab base de " +
-                    $"'{plan.ScreenName}'.\n\nTrabalho pendurado nesses objetos específicos " +
-                    "será perdido. Continuar?",
+                    detail +
+                    "\nTrabalho pendurado nesses objetos específicos será perdido. Continuar?",
                     "Importar",
                     "Cancelar");
 
