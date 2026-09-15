@@ -96,7 +96,24 @@ Consequência para o designer: **renomear uma layer é seguro; deletar e recriar
 recriada tem id novo, então para a ferramenta é outro objeto — o antigo é removido, e o que
 estava pendurado nele vai junto. O diff sempre mostra isso antes.
 
-## 5. Acessar a tela por código
+## 5. Atualizar o kit inteiro de uma vez
+
+O plugin do Figma também exporta **todo componente da página num arquivo só**, `.uikitset`, em
+vez de um `.uikit` por componente — útil depois de uma leva de ajustes visuais no kit inteiro.
+
+1. **Window → Arvore → UI Exporter → `Escolher...`** e selecione o `.uikitset` (a mesma janela
+   de sempre; a extensão é o que roteia para o import em lote, igual já acontece entre
+   `.uiexport` e `.uikit`).
+2. A janela lista cada componente do lote com o status dele: pronto, bloqueado, ou precisando de
+   adoção (prefab existente que a ferramenta não gerou).
+3. **`Importar todos os prontos`** importa de uma vez todo componente sem pendência. Um
+   componente bloqueado ou pendente de adoção **não trava os outros** — ele fica de fora do lote
+   e aparece no relatório, para você resolver sozinho pelo fluxo de `.uikit` de sempre.
+
+Cada componente do lote passa pela mesma validação e o mesmo diff do import avulso — o lote só
+evita reabrir a janela e reescolher arquivo catorze vezes.
+
+## 6. Acessar a tela por código
 
 Toda layer marcada com `@Nome` no Figma entra no `UIViewRefs` da raiz:
 
@@ -131,7 +148,7 @@ ordenação.
 ## Desenvolvimento
 
 ```bash
-bash tools~/unity-test.sh                 # compila e roda os 55 testes EditMode
+bash tools~/unity-test.sh                 # compila e roda os 84 testes EditMode
 bash tools~/unity-test.sh --compile-only  # só compila
 ```
 

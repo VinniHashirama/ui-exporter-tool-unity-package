@@ -18,11 +18,13 @@ namespace Arvore.UIExporter.Editor
     {
         private const string PackageExtension = "uiexport";
         private const string KitExtension = "uikit";
+        private const string KitSetExtension = "uikitset";
         private const string LastFolderKey = "Arvore.UIExporter.LastFolder";
 
         private string packagePath;
         private ScreenImporter.Plan plan;
         private KitImporter.Plan kitPlan;
+        private KitBatchImporter.BatchPlan batchPlan;
         private ImportReport lastReport;
         private Vector2 scroll;
         private bool showDiffDetails;
@@ -55,6 +57,12 @@ namespace Arvore.UIExporter.Editor
                 EditorGUILayout.Space(8f);
             }
 
+            if (batchPlan != null)
+            {
+                DrawBatchPlan();
+                EditorGUILayout.Space(8f);
+            }
+
             if (lastReport != null)
             {
                 DrawReport();
@@ -84,7 +92,8 @@ namespace Arvore.UIExporter.Editor
             }
 
             EditorGUILayout.HelpBox(
-                $".{PackageExtension} é uma tela; .{KitExtension} é um componente do kit. " +
+                $".{PackageExtension} é uma tela; .{KitExtension} é um componente do kit; " +
+                $".{KitSetExtension} é o kit inteiro de uma página do Figma de uma vez. " +
                 "Nada é escrito no projeto até você confirmar.",
                 MessageType.None);
         }
@@ -98,9 +107,10 @@ namespace Arvore.UIExporter.Editor
                 Directory.Exists(startFolder) ? startFolder : Application.dataPath,
                 new[]
                 {
-                    "Pacotes do UI Exporter", $"{PackageExtension},{KitExtension}",
+                    "Pacotes do UI Exporter", $"{PackageExtension},{KitExtension},{KitSetExtension}",
                     "Tela", PackageExtension,
                     "Componente do kit", KitExtension,
+                    "Kit inteiro", KitSetExtension,
                 });
 
             if (string.IsNullOrEmpty(chosen))
@@ -115,12 +125,24 @@ namespace Arvore.UIExporter.Editor
             showDiffDetails = false;
             plan = null;
             kitPlan = null;
+            batchPlan = null;
 
             // A extensão roteia, não o conteúdo: um pacote nunca deve ser importado como a
             // coisa errada por causa de um campo ausente ou inesperado.
-            bool isKit = Path.GetExtension(chosen)
-                .TrimStart('.')
-                .Equals(KitExtension, System.StringComparison.OrdinalIgnoreCase);
+            string extension = Path.GetExtension(chosen).TrimStart('.');
+
+            bool isKitSet = extension.Equals(KitSetExtension, System.StringComparison.OrdinalIgnoreCase);
+            bool isKit = extension.Equals(KitExtension, System.StringComparison.OrdinalIgnoreCase);
+
+            if (isKitSet)
+            {
+                batchPlan = KitBatchImporter.Prepare(packagePath);
+
+                // Também mostra quando só há avisos (ex.: skipped[]): quem escolhe um
+                // .uikitset precisa ver isso de cara, não só quando o pacote inteiro falha.
+                if (batchPlan.Report.Entries.Count > 0) lastReport = batchPlan.Report;
+                return;
+            }
 
             if (isKit)
             {
@@ -237,6 +259,92 @@ namespace Arvore.UIExporter.Editor
             if (prefab != null) EditorGUIUtility.PingObject(prefab);
 
             kitPlan = KitImporter.Prepare(packagePath);
+        }
+
+        /// <summary>
+        /// Deliberadamente simples: sem checkbox de adoção por componente, o que exigiria uma
+        /// UI própria por linha. Um componente que precisa de adoção é pulado no lote — o
+        /// caminho seguro é resolver esses poucos casos na aba de componente avulso, onde a
+        /// decisão de adotar já existe e é explícita.
+        /// </summary>
+        private void DrawBatchPlan()
+        {
+            EditorGUILayout.LabelField("O que vai acontecer", EditorStyles.boldLabel);
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Componentes no pacote", batchPlan.Components.Count.ToString());
+                EditorGUILayout.LabelField("Prontos", batchPlan.ReadyCount.ToString());
+                EditorGUILayout.LabelField("Precisam de adoção (pulados)", batchPlan.NeedsAdoptionCount.ToString());
+                EditorGUILayout.LabelField("Bloqueados", batchPlan.BlockedCount.ToString());
+            }
+
+            foreach (KitImporter.Plan componentPlan in batchPlan.Components)
+            {
+                string status = !componentPlan.CanImport
+                    ? "bloqueado"
+                    : componentPlan.NeedsAdoption
+                        ? "precisa de adoção"
+                        : "pronto";
+
+                string label = string.IsNullOrEmpty(componentPlan.CanonicalName)
+                    ? componentPlan.PackagePath
+                    : componentPlan.CanonicalName;
+
+                EditorGUILayout.LabelField($"• {label}", status);
+            }
+
+            if (batchPlan.NeedsAdoptionCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{batchPlan.NeedsAdoptionCount} componente(s) já têm um prefab que não foi " +
+                    "gerado a partir do Figma e serão pulados neste lote — importe-os " +
+                    "individualmente pela aba de componente para confirmar a adoção.",
+                    MessageType.Warning);
+            }
+
+            EditorGUILayout.Space(4f);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Reanalisar", GUILayout.Width(100f)))
+                {
+                    batchPlan = KitBatchImporter.Prepare(packagePath);
+                    lastReport = batchPlan.Report.Entries.Count > 0 ? batchPlan.Report : null;
+                }
+
+                EditorGUI.BeginDisabledGroup(batchPlan.ReadyCount == 0);
+
+                if (GUILayout.Button("Importar todos os prontos"))
+                {
+                    RunBatchImport();
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+        }
+
+        private void RunBatchImport()
+        {
+            try
+            {
+                EditorUtility.DisplayProgressBar(
+                    "UI Exporter",
+                    "Importando componentes prontos...",
+                    0.5f);
+
+                lastReport = KitBatchImporter.Execute(batchPlan, adoptAll: false);
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+
+            AssetDatabase.Refresh();
+
+            // O plano antigo já não descreve o estado do projeto — os componentes recém
+            // importados deixam de "precisar de adoção", por exemplo.
+            batchPlan = KitBatchImporter.Prepare(packagePath);
         }
 
         private void DrawPlan()

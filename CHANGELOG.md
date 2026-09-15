@@ -9,6 +9,35 @@ A compatibilidade com o plugin é dada pelo **major do `schemaVersion`** do cont
 esta versão. Este pacote suporta `schemaVersion` **1.1.x** e recusa major diferente com
 mensagem clara, em vez de gerar um prefab silenciosamente errado.
 
+## [Não publicado]
+
+Import em lote do kit inteiro, complementando o `.uikit` avulso. 84 testes EditMode.
+
+### Adicionado
+
+- **`.uikitset`**: pacote com todo componente de uma página do Figma num zip só (`kitset.json`
+  na raiz + um `components/<slug>/kit.json` por componente). A janela **Window → Arvore → UI
+  Exporter** passou a rotear também essa extensão, junto de `.uiexport` e `.uikit`.
+- **`KitBatchImporter`**: um `KitImporter.Plan` por componente do lote, reaproveitando toda a
+  validação e o diff do import avulso — **`.uikitset`** não é um formato novo de import, é o
+  mesmo de sempre chamado várias vezes. Um componente bloqueado ou pendente de adoção não trava
+  os outros: fica de fora do lote e aparece no relatório, para ser resolvido pelo fluxo de
+  `.uikit` de sempre.
+- **`UIKitSetPackage`**: leitor/validador do `.uikitset`, com a mesma postura de segurança do
+  `.uiexport`/`.uikit` — whitelist de entrada, contagem de bytes reais contra zip bomb,
+  assinatura PNG — mais uma checagem própria: pasta de componente no zip sem entrada
+  correspondente no manifesto derruba o pacote inteiro (dado escondido/contrabandeado).
+- `ZipEntryReader`: a leitura de zip contada por bytes reais, antes só dentro de
+  `UIExportPackage`, virou um helper interno compartilhado com `UIKitSetPackage` — evita duas
+  cópias da mesma lógica de defesa contra zip bomb divergirem com o tempo.
+
+### Decisões
+
+- **Componente com pendência de adoção não é resolvido em lote.** `KitBatchImporter.Execute`
+  pula esses e explica no relatório em vez de perguntar por um `AdoptExisting` por item — decidir
+  "sobrescrever o que não foi gerado por esta ferramenta" em massa, sem olhar item a item, é
+  exatamente o tipo de perda de trabalho que a adoção existe para evitar.
+
 ## [0.2.0] — 2026-09-14
 
 Import de componente do kit autorado no Figma, e a correção de quatro caminhos que destruíam

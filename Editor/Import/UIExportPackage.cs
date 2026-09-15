@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Arvore.UIExporter.Editor
@@ -39,12 +38,16 @@ namespace Arvore.UIExporter.Editor
         private static readonly Regex ImageEntryPattern =
             new Regex(@"^images/[A-Za-z0-9._@-]+\.png$", RegexOptions.Compiled);
 
-        private static readonly byte[] PngSignature =
-            { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
-
         private readonly Dictionary<string, byte[]> images;
 
-        private UIExportPackage(string json, Dictionary<string, byte[]> images, bool isKit)
+        /// <summary>
+        /// Interno em vez de privado: <see cref="UIKitSetPackage"/> monta um
+        /// <see cref="UIExportPackage"/> em memória por componente do lote, com o json e as
+        /// imagens já extraídos do zip do <c>.uikitset</c> — sem isso ele precisaria duplicar
+        /// toda a superfície de <see cref="TryGetImage"/>/<see cref="IsKit"/> em vez de
+        /// reusá-la.
+        /// </summary>
+        internal UIExportPackage(string json, Dictionary<string, byte[]> images, bool isKit)
         {
             Json = json;
             IsKit = isKit;
@@ -98,8 +101,8 @@ namespace Arvore.UIExporter.Editor
             if (info.Length > MaxArchiveBytes)
             {
                 throw new UIExportException(
-                    $"pacote tem {Megabytes(info.Length)} MB, acima do limite de " +
-                    $"{Megabytes(MaxArchiveBytes)} MB.");
+                    $"pacote tem {ZipEntryReader.Megabytes(info.Length)} MB, acima do limite de " +
+                    $"{ZipEntryReader.Megabytes(MaxArchiveBytes)} MB.");
             }
 
             try
@@ -152,8 +155,9 @@ namespace Arvore.UIExporter.Editor
                             $"{JsonEntryName} (tela) ou {KitEntryName} (componente), nunca ambos.");
                     }
 
-                    byte[] jsonBytes = ReadEntry(entry, MaxJsonBytes, ref budget, packageName);
-                    json = DecodeUtf8(jsonBytes);
+                    byte[] jsonBytes = ZipEntryReader.ReadCounted(
+                        entry, MaxJsonBytes, ref budget, packageName, MaxTotalBytes);
+                    json = ZipEntryReader.DecodeUtf8(jsonBytes, name);
                     isKit = name == KitEntryName;
                     continue;
                 }
@@ -166,8 +170,9 @@ namespace Arvore.UIExporter.Editor
                             $"{packageName} tem a entrada '{name}' repetida.");
                     }
 
-                    byte[] bytes = ReadEntry(entry, MaxImageBytes, ref budget, packageName);
-                    if (!HasPngSignature(bytes))
+                    byte[] bytes = ZipEntryReader.ReadCounted(
+                        entry, MaxImageBytes, ref budget, packageName, MaxTotalBytes);
+                    if (!ZipEntryReader.HasPngSignature(bytes))
                     {
                         throw new UIExportException(
                             $"'{name}' tem extensão .png mas não é um PNG.");
@@ -181,7 +186,7 @@ namespace Arvore.UIExporter.Editor
                 // ignorada: um pacote com entrada inesperada não é um pacote parcialmente
                 // bom, é um pacote que não sabemos de onde veio.
                 throw new UIExportException(
-                    $"{packageName} tem a entrada inesperada '{Describe(name)}'. " +
+                    $"{packageName} tem a entrada inesperada '{ZipEntryReader.Describe(name)}'. " +
                     $"Um pacote válido contém apenas {JsonEntryName} (ou {KitEntryName}) e " +
                     "images/*.png.");
             }
@@ -193,126 +198,6 @@ namespace Arvore.UIExporter.Editor
             }
 
             return new UIExportPackage(json, images, isKit);
-        }
-
-        /// <summary>
-        /// Lê uma entrada contando os bytes de verdade.
-        /// </summary>
-        /// <remarks>
-        /// <see cref="ZipArchiveEntry.Length"/> é o tamanho <i>declarado</i> no cabeçalho
-        /// do zip e pode mentir — é exatamente o que uma bomba de descompressão faz. A
-        /// única checagem que vale é contar o que realmente sai do stream, e parar no
-        /// limite.
-        /// </remarks>
-        private static byte[] ReadEntry(
-            ZipArchiveEntry entry,
-            long maxBytes,
-            ref long budget,
-            string packageName)
-        {
-            using Stream source = entry.Open();
-            using var buffer = new MemoryStream();
-
-            byte[] chunk = new byte[81920];
-            long read = 0;
-
-            while (true)
-            {
-                int count = source.Read(chunk, 0, chunk.Length);
-                if (count <= 0)
-                {
-                    break;
-                }
-
-                read += count;
-                budget -= count;
-
-                if (read > maxBytes)
-                {
-                    throw new UIExportException(
-                        $"'{entry.FullName}' em {packageName} passa de " +
-                        $"{Megabytes(maxBytes)} MB descomprimido.");
-                }
-
-                if (budget < 0)
-                {
-                    throw new UIExportException(
-                        $"{packageName} passa de {Megabytes(MaxTotalBytes)} MB " +
-                        "descomprimido no total.");
-                }
-
-                buffer.Write(chunk, 0, count);
-            }
-
-            return buffer.ToArray();
-        }
-
-        private static string DecodeUtf8(byte[] bytes)
-        {
-            // throwOnInvalidBytes: um ui.json que não é UTF-8 válido deve falhar aqui, e
-            // não virar texto com caracteres de substituição que confundem o diagnóstico.
-            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
-            try
-            {
-                int offset = HasUtf8Bom(bytes) ? 3 : 0;
-                return utf8.GetString(bytes, offset, bytes.Length - offset);
-            }
-            catch (DecoderFallbackException error)
-            {
-                throw new UIExportException("ui.json não está em UTF-8 válido.", error);
-            }
-        }
-
-        private static bool HasUtf8Bom(byte[] bytes)
-        {
-            return bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
-        }
-
-        private static bool HasPngSignature(byte[] bytes)
-        {
-            if (bytes.Length < PngSignature.Length)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < PngSignature.Length; i++)
-            {
-                if (bytes[i] != PngSignature[i])
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Sanitiza o nome antes de colocá-lo numa mensagem de erro: o nome vem do zip e
-        /// não deve conseguir injetar controle nem poluir o log com algo gigante.
-        /// </summary>
-        private static string Describe(string entryName)
-        {
-            var builder = new StringBuilder(64);
-            int limit = Math.Min(entryName.Length, 60);
-
-            for (int i = 0; i < limit; i++)
-            {
-                char c = entryName[i];
-                builder.Append(char.IsControl(c) ? '?' : c);
-            }
-
-            if (entryName.Length > limit)
-            {
-                builder.Append("...");
-            }
-
-            return builder.ToString();
-        }
-
-        private static long Megabytes(long bytes)
-        {
-            return bytes / (1024 * 1024);
         }
     }
 }

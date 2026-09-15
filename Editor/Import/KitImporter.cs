@@ -68,11 +68,65 @@ namespace Arvore.UIExporter.Editor
             };
 
             UIExportPackage package;
-            IRDocument document;
 
             try
             {
                 package = UIExportPackage.Read(packagePath);
+            }
+            catch (UIExportException error)
+            {
+                report.Error("package/invalid", error.Message);
+                return plan;
+            }
+
+            return PrepareFromPackage(package, plan);
+        }
+
+        /// <summary>
+        /// Lê e valida um pacote já em memória. Não escreve nada no projeto.
+        /// </summary>
+        /// <remarks>
+        /// Existe para o <see cref="KitBatchImporter"/>: um <c>.uikitset</c> não tem um
+        /// arquivo <c>.uikit</c> por componente no disco, só o zip inteiro já lido — sem este
+        /// overload, importar em lote exigiria escrever cada componente num arquivo temporário
+        /// só para <see cref="UIExportPackage.Read"/> conseguir ler de novo.
+        /// </remarks>
+        /// <param name="virtualPackagePath">
+        /// Usado só para exibição e para reanalisar (<see cref="Plan.PackagePath"/>) — nada no
+        /// import consome isto como caminho de arquivo de verdade. Um valor como
+        /// <c>"MeuKit.uikitset::components/Button_Primary/kit.json"</c> serve para o dev
+        /// identificar de qual entrada do lote um erro veio.
+        /// </param>
+        public static Plan Prepare(
+            UIExportPackage package,
+            string virtualPackagePath,
+            UIImportSettings settings = null)
+        {
+            var report = new ImportReport();
+            var plan = new Plan
+            {
+                PackagePath = virtualPackagePath,
+                Report = report,
+                Settings = settings ?? UIImportSettings.LoadOrDefault(),
+                CanImport = false,
+            };
+
+            if (package == null)
+            {
+                report.Error("package/invalid", "nenhum pacote informado.");
+                return plan;
+            }
+
+            return PrepareFromPackage(package, plan);
+        }
+
+        private static Plan PrepareFromPackage(UIExportPackage package, Plan plan)
+        {
+            ImportReport report = plan.Report;
+            IRDocument document;
+
+            try
+            {
                 document = IRReader.Read(package.Json);
             }
             catch (UIExportException error)
